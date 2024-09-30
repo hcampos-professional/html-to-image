@@ -1,5 +1,9 @@
 {
  "extends": "@bubkoo/tsconfig",
+  "compilerOptions": {
+    "lib": ["esnext", "dom"],
+    "target": "ESNext"
+  },
   "include": [
     "src/**/*.ts"
   ]

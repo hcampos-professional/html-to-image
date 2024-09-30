@@ -1,6 +1,6 @@
 import type { Options } from './types'
 import { clonePseudoElements } from './clone-pseudos'
-import { createImage, toArray, isInstanceOfElement } from './util'
+import { createImage, isInstanceOfElement } from './util'
 import { getMimeType } from './mimes'
 import { resourceToDataURL } from './dataurl'
 
@@ -75,14 +75,16 @@ async function cloneChildren<T extends HTMLElement>(
   let children: T[] = []
 
   if (isSlotElement(nativeNode) && nativeNode.assignedNodes) {
-    children = toArray<T>(nativeNode.assignedNodes())
+    children = nativeNode.assignedNodes() as T[]
   } else if (
     isInstanceOfElement(nativeNode, HTMLIFrameElement) &&
     nativeNode.contentDocument?.body
   ) {
-    children = toArray<T>(nativeNode.contentDocument.body.childNodes)
+    children = Array.from(nativeNode.contentDocument.body.childNodes) as T[]
   } else {
-    children = toArray<T>((nativeNode.shadowRoot ?? nativeNode).childNodes)
+    children = Array.from(
+      (nativeNode.shadowRoot ?? nativeNode).childNodes,
+    ) as T[]
   }
 
   if (
@@ -92,17 +94,15 @@ async function cloneChildren<T extends HTMLElement>(
     return clonedNode
   }
 
-  await children.reduce(
-    (deferred, child) =>
-      deferred
-        .then(() => cloneNode(child, options))
-        .then((clonedChild: HTMLElement | null) => {
-          if (clonedChild) {
-            clonedNode.appendChild(clonedChild)
-          }
-        }),
-    Promise.resolve(),
+  const clonedChildren = await Promise.all(
+    children.map((child) => cloneNode(child, options)),
   )
+
+  for (const clonedChild of clonedChildren) {
+    if (clonedChild) {
+      clonedNode.append(clonedChild)
+    }
+  }
 
   return clonedNode
 }
@@ -114,36 +114,46 @@ function cloneCSSStyle<T extends HTMLElement>(nativeNode: T, clonedNode: T) {
   }
 
   const sourceStyle = window.getComputedStyle(nativeNode)
+
   if (sourceStyle.cssText) {
     targetStyle.cssText = sourceStyle.cssText
     targetStyle.transformOrigin = sourceStyle.transformOrigin
-  } else {
-    toArray<string>(sourceStyle).forEach((name) => {
-      let value = sourceStyle.getPropertyValue(name)
-      if (name === 'font-size' && value.endsWith('px')) {
-        const reducedFont =
-          Math.floor(parseFloat(value.substring(0, value.length - 2))) - 0.1
-        value = `${reducedFont}px`
-      }
+    return
+  }
 
-      if (
-        isInstanceOfElement(nativeNode, HTMLIFrameElement) &&
-        name === 'display' &&
-        value === 'inline'
-      ) {
-        value = 'block'
-      }
-      
-      if (name === 'd' && clonedNode.getAttribute('d')) {
-        value = `path(${clonedNode.getAttribute('d')})`
-      }
-      
-      targetStyle.setProperty(
-        name,
-        value,
-        sourceStyle.getPropertyPriority(name),
-      )
-    })
+  for (let i = 0; i < sourceStyle.length; ++i) {
+    const name = sourceStyle[i]
+    let value = sourceStyle.getPropertyValue(name)
+
+    switch (name) {
+      case 'font-size':
+        if (value.endsWith('px')) {
+          const reducedFont =
+            Math.floor(
+              Number.parseFloat(value.slice(0, Math.max(0, value.length - 2))),
+            ) - 0.1
+          value = `${reducedFont}px`
+        }
+        break
+      case 'display':
+        if (
+          value === 'inline' &&
+          isInstanceOfElement(nativeNode, HTMLIFrameElement)
+        ) {
+          value = 'block'
+        }
+        break
+      case 'd':
+        const attribute = clonedNode.getAttribute('d')
+        if (attribute) {
+          value = `path(${attribute})`
+        }
+        break
+      default:
+        break
+    }
+
+    targetStyle.setProperty(name, value, sourceStyle.getPropertyPriority(name))
   }
 }
 
@@ -240,6 +250,5 @@ export async function cloneNode<T extends HTMLElement>(
   return Promise.resolve(node)
     .then((clonedNode) => cloneSingleNode(clonedNode, options) as Promise<T>)
     .then((clonedNode) => cloneChildren(node, clonedNode, options))
-    .then((clonedNode) => decorate(node, clonedNode))
-    .then((clonedNode) => ensureSVGSymbols(clonedNode, options))
+    .then((clonedNode) => ensureSVGSymbols(decorate(node, clonedNode), options))
 }
